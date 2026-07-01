@@ -194,16 +194,27 @@ def upload_to_databricks(
             f"TRY_CAST(`{c}` AS {t}) AS `{c}`" for c, t in columns
         ]
         select_cols = ", ".join(cast_exprs)
+        update_set = ", ".join(
+            f"target.`{c}` = src_cast.`{c}`" for c, _ in columns if c != "id"
+        )
+        insert_cols = ", ".join(f"`{c}`" for c, _ in columns)
+        insert_vals = ", ".join(f"src_cast.`{c}`" for c, _ in columns)
         cursor.execute(f"""
-            INSERT INTO {full_table}
-            SELECT {select_cols}
-            FROM read_files(
-                '{volume_path}',
-                format => 'csv',
-                header => true,
-                inferSchema => false
-            )
+            MERGE INTO {full_table} AS target
+            USING (
+                SELECT {select_cols}
+                FROM read_files(
+                    '{volume_path}',
+                    format => 'csv',
+                    header => true,
+                    inferSchema => false
+                )
+            ) AS src_cast
+            ON target.`id` = src_cast.`id`
+            WHEN MATCHED THEN UPDATE SET {update_set}
+            WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})
         """)
+        print(f"  Estrategia: MERGE (upsert por id)")
     else:
         cursor.execute(f"""
             CREATE TABLE {full_table} AS
